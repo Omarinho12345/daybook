@@ -112,6 +112,30 @@ $gh  = Resolve-Exe -Name 'gh'  -Fallbacks @('C:\Program Files\GitHub CLI\gh.exe'
 
 $entryExists = Test-Path -LiteralPath $entryPath
 
+# --- 0a. refresh origin/main before deciding to skip ------------------------
+# The cloud workflow runs at 08:30 UTC; when it wins the race this clone's
+# origin/main is stale, and committing on top of it would diverge so the push
+# gets rejected. Only tracked files are considered clean here, so an untracked
+# daily.log never blocks the sync, and a real local edit is never fast-forwarded
+# away. A network failure degrades to the previous behaviour instead of aborting.
+$trackedDirty = (& $git -C $repoPath status --porcelain --untracked-files=no 2>&1 | Out-String).Trim()
+if (-not $trackedDirty) {
+    try {
+        & $git -C $repoPath fetch --prune origin 2>&1 | Out-Null
+        $fetchCode = $LASTEXITCODE
+        if ($fetchCode -ne 0) { throw "git fetch exited with code $fetchCode" }
+
+        & $git -C $repoPath merge --ff-only origin/main 2>&1 | Out-Null
+        $mergeCode = $LASTEXITCODE
+        if ($mergeCode -ne 0) {
+            Write-Log "not fast-forwardable to origin/main (exit $mergeCode); continuing with local state"
+        }
+    }
+    catch {
+        Write-Log ("sync with origin/main failed: {0}; continuing with local state" -f $_.Exception.Message)
+    }
+}
+
 # --- 0. no-op fast path: logged, committed and already on origin/main --------
 # Scheduled repetition and StartWhenAvailable mean this may run several times a
 # day; the common case should cost nothing and touch the network not at all.
