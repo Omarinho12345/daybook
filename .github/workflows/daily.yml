@@ -1,0 +1,80 @@
+name: Daily entry
+
+on:
+  schedule:
+    - cron: '30 8 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  entry:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Set commit identity
+        run: |
+          git config user.name "Omarinho12345"
+          git config user.email "omarottelli720@gmail.com"
+
+      - name: Resolve today's date in UTC
+        run: echo "DATE=$(date -u +%F)" >> "$GITHUB_ENV"
+
+      - name: Check whether the entry already exists
+        id: entry
+        run: |
+          if [ -f "entries/$DATE.md" ]; then
+            echo "entries/$DATE.md already exists; exiting."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Write the entry
+        if: steps.entry.outputs.skip == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -o pipefail
+          mkdir -p entries
+
+          if ! gh search prs --author Omarinho12345 --updated "$DATE" \
+                 --json repository,number,title,state --limit 100 \
+               | jq -r '.[] | "- \(.repository.nameWithOwner)#\(.number) \(.state) - \(.title)"' \
+               > /tmp/work-log.txt; then
+            echo "- No activity recorded" > /tmp/work-log.txt
+          fi
+
+          if [ ! -s /tmp/work-log.txt ]; then
+            echo "- No activity recorded" > /tmp/work-log.txt
+          fi
+
+          {
+            echo "# $DATE"
+            echo
+            echo "## Work log"
+            echo
+            cat /tmp/work-log.txt
+            echo
+            echo "## Notes"
+            echo
+            echo "- "
+          } > "entries/$DATE.md"
+
+          cat "entries/$DATE.md"
+
+      - name: Commit and push
+        if: steps.entry.outputs.skip == 'false'
+        run: |
+          git add "entries/$DATE.md"
+          if git diff --cached --quiet; then
+            echo "Nothing staged; exiting."
+            exit 0
+          fi
+          git commit -m "log: $DATE"
+          git push origin HEAD:main
